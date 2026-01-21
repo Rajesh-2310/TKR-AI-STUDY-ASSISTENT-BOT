@@ -1,89 +1,78 @@
-@echo off
-REM TKR College Chatbot - Quick Start Script for Windows
+1. Open-Source Chat / Conversational AI Models (Free to Use)
 
-echo ========================================
-echo TKR College AI Chatbot - Quick Start
-echo ========================================
-echo.
+These models are fully downloadable for free and suitable for building your own chatbot backend.
 
-REM Check if Python is installed
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Python is not installed or not in PATH
-    echo Please install Python 3.8+ from https://www.python.org/downloads/
-    pause
-    exit /b 1
-)
+Meta / Llama Family
 
-echo [1/5] Checking Python installation...
-python --version
-echo.
+Llama 2 (7B / 13B / 70B + chat variants)
+High-quality open-source models fine-tuned for dialogue use (Llama-2-Chat).
+Download at Hugging Face or Meta’s official release pages.
 
-REM Check if MySQL is installed
-mysql --version >nul 2>&1
-if errorlevel 1 (
-    echo WARNING: MySQL command not found in PATH
-    echo Make sure MySQL is installed and accessible
-    echo.
-)
+Vicuna
 
-echo [2/5] Setting up backend...
-cd backend
+Vicuna-13B / Vicuna-7B
+Fine-tuned from LLaMA using community chat data for improved conversational performance.
+Often hosted via Hugging Face.
 
-REM Check if virtual environment exists
-if not exist "venv" (
-    echo Creating virtual environment...
-    python -m venv venv
-)
+Falcon Series
 
-REM Activate virtual environment
-call venv\Scripts\activate
+Falcon-7B / Falcon-180B
+Open-source models known for strong text generation and efficiency (Falcon-7B runs well on consumer GPUs).
+Falcon 180B is one of the most capable free models.
 
-REM Check if .env exists
-if not exist ".env" (
-    echo Creating .env file from template...
-    copy .env.example .env
-    echo.
-    echo IMPORTANT: Please edit backend\.env with your MySQL credentials!
-    echo Press any key after you've updated the .env file...
-    pause
-)
+Mistral Chat Models
 
-echo [3/5] Installing Python dependencies...
-echo This may take a few minutes on first run...
-pip install -r requirements.txt --quiet
+Mistral-7B-Chat/Instruct
+A free, efficient open-source chatbot model with good dialogue quality.
 
-echo.
-echo [4/5] Starting Flask backend server...
-echo Backend will run on http://localhost:5000
-echo.
-start "TKR Chatbot Backend" cmd /k "venv\Scripts\activate && python app.py"
+OpenChat
 
-REM Wait for backend to start
-timeout /t 5 /nobreak >nul
+OpenChat (various sizes)
+Community fine-tuned conversational models optimized for chat applications.
 
-echo [5/5] Opening frontend...
-cd ..\frontend
-start "TKR Chatbot Frontend" cmd /k "python -m http.server 8000"
+Yi 34B-Chat
 
-REM Wait a moment then open browser
-timeout /t 3 /nobreak >nul
-start http://localhost:8000
+Yi 34B-Chat
+Large free chat-optimized model with extended context support.
 
-echo.
-echo ========================================
-echo TKR College Chatbot is now running!
-echo ========================================
-echo.
-echo Backend API: http://localhost:5000
-echo Frontend UI: http://localhost:8000
-echo.
-echo Two command windows have opened:
-echo 1. Backend server (Flask)
-echo 2. Frontend server (HTTP)
-echo.
-echo Keep both windows open while using the chatbot.
-echo Close them to stop the servers.
-echo.
-echo Press any key to exit this window...
-pause >nul
+Tiny / Small Open Models (for low-resource setups)
+
+TinyLlama (small, efficient version of LLaMA)
+Good for CPU or low-GPU environments.
+
+2. Ready-to-Use Model Collections & APIs (Free / Free Credits)
+
+If you want chatbot models accessible via API without hosting infrastructure, these resources list free options or free tiers:
+
+Free LLM API Resources
+
+Free LLM API Listings (OpenRouter, others) — directory of APIs with free quotas to run LLMs.
+
+Where to Download These Models
+
+Most of these models are available from repositories like Hugging Face or GitHub. Here are starting points:
+
+Hugging Face Model Repositories
+
+Hugging Face Models Page
+Browse and download LLMs:
+https://huggingface.co/models
+
+Open-Source Chatbot Example Repos
+
+Open-Source LLM Chatbot (Google Colab demo)
+https://github.com/ruslanmv/Open-Source-LLM-Chatbot
+
+(Includes CodeLlama-7B, Llama-2-13B-chat, Falcon-7B-Instruct, Mistral-7B-Instruct, Zephyr-7B, Vicuna-7B)
+
+Local Chat Interfaces
+
+Jan (Open-Source ChatGPT Replacement) — runs local LLMs with unified UI
+https://jan.ai/
+
+3. Recommended Models by Use Case
+Use Case	Best Free / Open Model Options
+General Chatbot (balanced performance)	Llama-2-Chat, Vicuna
+Resource-Efficient Deployment (limited GPU)	TinyLlama, Mistral-7B, Falcon-7B
+High-Performance Dialogue	Falcon-180B, Yi-34B-Chat
+API / Cloud Access	Providers via OpenRouter / free LLM APIs
