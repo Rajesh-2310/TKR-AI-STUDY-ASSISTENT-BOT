@@ -33,7 +33,11 @@ email_service.init_app(app)
 
 # Initialize processors
 pdf_processor = PDFProcessor()
-gemini_rag_engine = None  # Will be initialized on first use
+
+# Initialize Gemini RAG engine at startup (not lazy loaded)
+logger.info("Initializing Gemini RAG engine...")
+gemini_rag_engine = get_gemini_rag_engine()
+logger.info("Gemini RAG engine ready")
 
 
 def allowed_file(filename):
@@ -145,11 +149,7 @@ def upload_material():
             logger.info(f"Processing PDF for material {material_id}")
             result = pdf_processor.process_pdf(file_path, material_id)
             
-            # Generate and store AI embeddings with Gemini RAG
-            global gemini_rag_engine
-            if gemini_rag_engine is None:
-                gemini_rag_engine = get_gemini_rag_engine()
-            
+            # Generate and store AI embeddings with Gemini RAG (engine already initialized)
             gemini_rag_engine.store_embeddings(material_id, result['chunks'])
             
             # Store extracted images
@@ -296,12 +296,7 @@ def chat():
         if not message:
             return jsonify({'success': False, 'error': 'Message required'}), 400
         
-        # Initialize Gemini RAG engine if needed
-        global gemini_rag_engine
-        if gemini_rag_engine is None:
-            gemini_rag_engine = get_gemini_rag_engine()
-        
-        # Get answer using Gemini AI-powered RAG
+        # Get answer using Gemini AI-powered RAG (engine already initialized at startup)
         result = gemini_rag_engine.answer_question(message, subject_id)
         
         # Save to chat history

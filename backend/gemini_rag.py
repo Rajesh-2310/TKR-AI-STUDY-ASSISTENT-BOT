@@ -5,6 +5,7 @@ Uses Google's Gemini AI with retrieval augmented generation
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import json
+import time
 from database import get_db
 import logging
 import google.generativeai as genai
@@ -86,55 +87,95 @@ class GeminiRAGEngine:
         return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
     
     def search_similar_chunks(self, query, subject_id=None, top_k=5):
-        """Search for most similar document chunks"""
+        """Search for most similar document chunks with optimized vectorization"""
         try:
             db = get_db()
             
             # Generate query embedding
             query_embedding = self.generate_embedding(query)
+            query_vec = np.array(query_embedding)
             
-            # Get all embeddings (with optional subject filter)
+            # Optimized query: limit results and use indexes
+            # Only fetch top 200 candidates to reduce data transfer
             if subject_id:
                 sql = """
-                    SELECT de.*, m.title, m.subject_id
+                    SELECT de.id, de.chunk_text, de.page_number, 
+                           de.material_id, de.embedding_vector,
+                           m.title, m.subject_id
                     FROM document_embeddings de
                     JOIN materials m ON de.material_id = m.id
-                    WHERE m.subject_id = %s
+                    WHERE m.subject_id = %s AND m.is_processed = TRUE
+                    ORDER BY de.id DESC
+                    LIMIT 200
                 """
                 embeddings = db.execute_query(sql, (subject_id,))
             else:
                 sql = """
-                    SELECT de.*, m.title, m.subject_id
+                    SELECT de.id, de.chunk_text, de.page_number, 
+                           de.material_id, de.embedding_vector,
+                           m.title, m.subject_id
                     FROM document_embeddings de
                     JOIN materials m ON de.material_id = m.id
+                    WHERE m.is_processed = TRUE
+                    ORDER BY de.id DESC
+                    LIMIT 200
                 """
                 embeddings = db.execute_query(sql)
             
-            # Calculate similarities
-            results = []
-            for emb in embeddings:
-                stored_embedding = json.loads(emb['embedding_vector'])
-                
-                # Skip empty embeddings
-                if not stored_embedding or len(stored_embedding) == 0:
-                    continue
-                
-                similarity = self.cosine_similarity(query_embedding, stored_embedding)
-                
-                results.append({
-                    'chunk_text': emb['chunk_text'],
-                    'page_number': emb['page_number'],
-                    'material_id': emb['material_id'],
-                    'material_title': emb['title'],
-                    'similarity': float(similarity)
-                })
+            if not embeddings:
+                logger.warning("No embeddings found in database")
+                return []
             
-            # Sort by similarity and return top k
-            results.sort(key=lambda x: x['similarity'], reverse=True)
-            return results[:top_k]
+            # Vectorized similarity calculation
+            embedding_vectors = []
+            metadata = []
+            
+            for emb in embeddings:
+                try:
+                    stored_embedding = json.loads(emb['embedding_vector'])
+                    if stored_embedding and len(stored_embedding) > 0:
+                        embedding_vectors.append(stored_embedding)
+                        metadata.append({
+                            'chunk_text': emb['chunk_text'],
+                            'page_number': emb['page_number'],
+                            'material_id': emb['material_id'],
+                            'material_title': emb['title']
+                        })
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"Skipping invalid embedding: {e}")
+                    continue
+            
+            if not embedding_vectors:
+                logger.warning("No valid embeddings to search")
+                return []
+            
+            # Convert to NumPy array for vectorized operations
+            embedding_matrix = np.array(embedding_vectors)
+            
+            # Vectorized cosine similarity calculation (much faster than loop)
+            # similarity = (A · B) / (||A|| * ||B||)
+            dot_products = np.dot(embedding_matrix, query_vec)
+            query_norm = np.linalg.norm(query_vec)
+            embedding_norms = np.linalg.norm(embedding_matrix, axis=1)
+            similarities = dot_products / (embedding_norms * query_norm)
+            
+            # Get top k indices
+            top_indices = np.argsort(similarities)[::-1][:top_k]
+            
+            # Build results
+            results = []
+            for idx in top_indices:
+                result = metadata[idx].copy()
+                result['similarity'] = float(similarities[idx])
+                results.append(result)
+            
+            logger.info(f"Found {len(results)} similar chunks (searched {len(embeddings)} candidates)")
+            return results
             
         except Exception as e:
             logger.error(f"Similarity search failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
     
     def generate_answer_with_gemini(self, query, context_chunks):
@@ -142,32 +183,26 @@ class GeminiRAGEngine:
         try:
             if not context_chunks:
                 # No context found - alert about missing content
-                prompt = f"""Act as a Senior Engineering Professor and Exam Evaluator at TKR College of Engineering and Technology.
+                prompt = f"""You are a Senior Engineering Professor at TKR College.
 
 Student's Question: {query}
 
-⚠️ IMPORTANT: No relevant content was found in the uploaded study materials (syllabus, notes, PDFs, or PYQs).
+⚠️ IMPORTANT: No relevant content found in uploaded study materials.
 
-FORMATTING REQUIREMENTS:
-- Use markdown formatting with headers (##, ###)
-- Use emojis to make it engaging (📚, 🎓, ⚡, 💡, etc.)
-- Use bullet points and numbered lists
-- Use **bold** for key terms
-- Use `code blocks` for technical terms
-- Create clear visual hierarchy
+RESPONSE FORMAT:
+## ⚠️ Topic Not Found in Your Materials
 
-Response Structure:
-1. Start with: "## ⚠️ Topic Not Found in Your Materials"
-2. Explain what's missing
-3. Ask: "### 🤔 Would you like me to provide standard reference material?"
-4. If providing answer, use this structure:
-   - ## 📖 Definition
-   - ## 🔍 Detailed Explanation  
-   - ## 📝 Key Points
-   - ## 📐 Formulas (in LaTeX: $$formula$$)
-   - ## ✅ Advantages/Applications
+[Explain what's missing and suggest uploading relevant materials]
 
-Generate a beautifully formatted response:"""
+### 🤔 Would you like standard reference material?
+
+[If providing answer, use this structure:]
+## 📖 Definition
+## 🔍 Explanation  
+## 💡 Key Points
+## 📐 Formulas (LaTeX: $$formula$$)
+
+Use markdown, emojis, and clear formatting:"""
                 
                 response = self.gemini_model.generate_content(prompt)
                 return {
@@ -187,85 +222,38 @@ Generate a beautifully formatted response:"""
             # Calculate average confidence
             avg_confidence = sum(chunk['similarity'] for chunk in context_chunks) / len(context_chunks)
             
-            # Create enhanced prompt for conversational, direct answers like ChatGPT/Gemini
-            prompt = f"""You are a helpful AI tutor for TKR College of Engineering and Technology students. Answer questions directly and conversationally using the knowledge from the provided study materials.
+            # Create optimized prompt for fast, conversational answers
+            prompt = f"""You are an AI tutor for TKR College students. Answer directly and conversationally using the study materials provided.
 
-CORE PRINCIPLES:
-1. **Answer directly** - Don't say "According to the material..." or "The PDF states...". Just answer the question naturally.
-2. **Use source knowledge** - Base your answer ONLY on the provided materials, but present it as if you're explaining it yourself.
-3. **Be conversational** - Write like ChatGPT or Gemini would - clear, friendly, and helpful.
-4. **Always cite sources** - Include source references at the end (this is MANDATORY, not optional).
-5. **Beautiful formatting** - Use markdown, emojis, and structure to make answers engaging.
-
-STUDY MATERIALS PROVIDED:
+STUDY MATERIALS:
 {context}
 
 STUDENT'S QUESTION: {query}
 
-RESPONSE GUIDELINES:
+INSTRUCTIONS:
+• Answer directly - don't say "According to the material..." just explain naturally
+• Use markdown formatting with ## headers and emojis (📖, 🔍, 💡, ⚡, ✅)
+• **Bold** key terms, `code style` for technical terms
+• Use bullet points and numbered lists
+• Include LaTeX for formulas: $$formula$$
+• ALWAYS cite sources at the end (MANDATORY)
 
-**Tone & Style:**
-- Write naturally and conversationally (like explaining to a friend)
-- Don't describe what's in the PDF - just answer the question directly
-- Use "we", "let's", "you can" to make it engaging
-- Be clear, concise, and helpful
+STRUCTURE:
+## 📖 [Main Topic]
+[Direct explanation]
 
-**Formatting (Make it beautiful like ChatGPT/Gemini):**
-- Use ## for main sections with emojis (📖, 🔍, 💡, ⚡, 📝, ✅, 🎯, 📊)
-- Use ### for subsections
-- **Bold** for key terms and important concepts
-- `code style` for technical terms, formulas, variable names
-- > blockquotes for important definitions or notes
-- Numbered lists for steps/procedures
-- Bullet points (•) for features/characteristics
-- Tables for comparisons (when helpful)
-- LaTeX for ALL mathematical formulas: $$formula$$
-- Horizontal rules (---) between major sections
-
-**Structure your answer naturally:**
-
-Start with a clear, direct answer to the question. Then elaborate with:
-
-## 📖 Core Concept
-[Explain the main concept directly - no "according to..." just explain it]
-
-## 🔍 Detailed Explanation
-[Break down the concept step-by-step in a natural, conversational way]
-
-## 💡 Key Points to Remember
-• **Point 1**: Brief explanation
-• **Point 2**: Brief explanation
-• **Point 3**: Brief explanation
+## 🔍 Key Points
+• **Point 1**: Explanation
+• **Point 2**: Explanation
 
 ## 📐 Formulas (if applicable)
 $$formula$$
 
-Where:
-- Variable: meaning
-- Variable: meaning
-
-## ✅ Applications/Advantages (if applicable)
-[Explain where/how this is used]
-
-## 🎯 Exam Tips (if relevant)
-[Quick tips for answering this in exams]
-
 ---
-
 ## 📚 Sources
-**Referenced from:**
-- Material: [Name], Pages: [X, Y, Z]
-- Unit/Chapter: [If mentioned]
+**Referenced from:** [Material names and pages]
 
-**CRITICAL RULES:**
-- ❌ DON'T say "The material states..." or "According to page X..."
-- ✅ DO answer directly: "Machine learning is a method where..."
-- ❌ DON'T describe the PDF content
-- ✅ DO use the PDF knowledge to answer naturally
-- ✅ ALWAYS include source references at the end (MANDATORY)
-- ✅ If something is NOT in the materials, clearly state: "⚠️ This topic is not covered in your uploaded materials"
-
-Generate a helpful, beautifully formatted answer:"""
+Generate a clear, well-formatted answer:"""
             
             # Generate response with Gemini
             response = self.gemini_model.generate_content(prompt)
@@ -297,13 +285,38 @@ Generate a helpful, beautifully formatted answer:"""
             }
     
     def answer_question(self, question, subject_id=None, top_k=5):
-        """Complete RAG pipeline: retrieve and generate answer with Gemini"""
+        """Complete RAG pipeline: retrieve and generate answer with Gemini (with caching)"""
         try:
+            # Create cache key
+            cache_key = f"{question.lower().strip()}_{subject_id}_{top_k}"
+            
+            # Check cache first
+            if hasattr(self, '_answer_cache') and cache_key in self._answer_cache:
+                cached_result, cache_time = self._answer_cache[cache_key]
+                # Cache valid for 5 minutes
+                if (time.time() - cache_time) < 300:
+                    logger.info(f"Returning cached answer for: {question[:50]}")
+                    return cached_result
+            
             # Search for relevant chunks
             similar_chunks = self.search_similar_chunks(question, subject_id, top_k)
             
             # Generate answer using Gemini
             result = self.generate_answer_with_gemini(question, similar_chunks)
+            
+            # Cache the result
+            if not hasattr(self, '_answer_cache'):
+                self._answer_cache = {}
+            
+            # Limit cache size to 100 entries
+            if len(self._answer_cache) > 100:
+                # Remove oldest entries
+                oldest_keys = sorted(self._answer_cache.keys(), 
+                                   key=lambda k: self._answer_cache[k][1])[:20]
+                for key in oldest_keys:
+                    del self._answer_cache[key]
+            
+            self._answer_cache[cache_key] = (result, time.time())
             
             return result
             
